@@ -1,0 +1,678 @@
+Below link is the program
+https://macoutreach.rocks/share/ff847205
+
+-- VVV DO NOT MODIFY THESE VVV
+-- (Unless you know what you're doing)
+import Set exposing (Set)
+import Plane3d
+
+-- Data type for representing different kinds of modules
+type ModuleType
+  = Housing
+  | Medical
+  | Recreation
+  | Custom (Object BodyCoordinates)
+
+-- Each node stores its ID, position on the global coordinate system, and its module type.
+type alias Node =
+  { id : Int
+  , position : Point3d Meters WorldCoordinates
+  , nodeType : ModuleType
+  }
+
+-- A City is a graph made up of nodes and their connections.
+-- Connections are represented as a set of IDs, to remove redundant connections.
+type alias City = List (Node, Set Int)
+
+-- This function loops through the given cityGraph and renders the nodes as modules.
+buildModules : City -> Model -> List (Body PhysicsData)
+buildModules cityGraph model =
+  List.map
+    ( \ (node, _) ->
+      let
+        pos = (Point3d.xCoordinate node.position, Point3d.yCoordinate node.position, Point3d.zCoordinate node.position)
+      in
+        case node.nodeType of
+          Housing ->
+            house (Color.rgb255 200 255 240) model
+              |> usePhysics "houseModule"
+              |> addTag "housing"
+              |> startAtPos pos
+          Medical ->
+            medical model
+              |> usePhysics "medModule"
+              |> addTag "medical"
+              |> startAtPos pos
+          Recreation ->
+            recreation model
+              |> usePhysics "recModule"
+              |> addTag "recreation"
+              |> startAtPos pos
+          Custom obj ->
+            obj
+              |> usePhysics "customModule"
+              |> addTag "customModule"
+              |> startAtPos pos
+    )
+    cityGraph
+
+-- This function loops through the given cityGraph
+-- and renders the connections between nodes.
+-- It is considerably more complex than the function
+-- for rendering the nodes themselves.
+buildConnections : City -> Model -> List (Body PhysicsData)
+buildConnections cityGraph model =
+  -- Loop through the list and render connections
+  List.map
+    ( \ (node, connections) ->
+      let
+        -- Get the list of nodes connected to this one
+        connectedNodes =
+          List.filter
+            ( \ (otherNode, _) ->
+              Set.member otherNode.id connections
+            )
+            cityGraph
+            |> List.map ( \ (otherNode, _) -> otherNode)
+        -- Extract positions. Could probably have been combined
+        -- with the above local variable
+        connectedPositions =
+          List.map
+            ( \ otherNode ->
+              otherNode.position
+            )
+            connectedNodes
+        -- The physics library is very finicky with local and global coordinate systems
+        -- This just converts the global node positions to a local one.
+        bodyPos = node.position |> Point3d.relativeTo Frame3d.atOrigin
+        -- A list of directions from this node to its connected nodes
+        directions =
+          List.map
+            ( \ pos ->
+              Maybe.withDefault Direction3d.z
+                (Direction3d.from bodyPos (pos |> Point3d.relativeTo Frame3d.atOrigin))
+            )
+            connectedPositions
+        -- Distances between this node and its connected nodes
+        -- Distances are adjusted somewhat to allow for the arrow to show up
+        lengths =
+          List.map
+            ( \ pos ->
+              Point3d.distanceFrom node.position pos
+                |> Quantity.minus (Length.meters 1)
+            )
+            connectedPositions
+        -- Zip the direction and length lists together
+        arrowData =
+          List.map2 Tuple.pair directions lengths
+      in
+        group3D
+          ( List.map
+              ( \ (dir, len) ->
+                arrowStartingAt
+                  bodyPos -- Arrow starts at this node...
+                  dir -- ...and points to a connected node
+                  { radius = Length.centimeters 10, length = len }
+                  |> matte Color.white
+                  -- Connections shouldn't cause collisions due to a bug
+              )
+              arrowData
+          )
+          |> noCollide
+          |> usePhysics ("node" ++ String.fromInt node.id ++ "connections")
+    )
+    cityGraph
+
+-- Combines buildModules and buildConnections
+buildCity cityGraph model =
+  buildModules cityGraph model ++ buildConnections cityGraph model
+
+-- Function to make creating nodes a bit easier.
+-- You technically don't need to use it, but you might find it helpful.
+buildNode : Int -> Point3d Meters WorldCoordinates -> ModuleType -> Node
+buildNode id pos moduleType =
+  { id = id
+  , position = pos
+  , nodeType = moduleType
+  }
+-- ^^^ DO NOT MODIFY THESE ^^^
+  
+-- VVV YOU MAY MODIFY THESE VVV
+
+-- These will be used to actually render the different module types.
+-- If you change the name or type signature (e.g. by adding parameters),
+-- you will also need to modify any references to them, so be careful.
+house wallColour model =
+  group3D
+    [ sphere 50
+        |> matte Color.gray
+     , polyCone [(-60, -60), (60, -60), (60, 60), (-60, 60), (-60, -60)] (0, 0, 40) model.meshStore
+        |> matte Color.red
+        |> move3D (0, 0, 50)
+      , door
+        |> move3D (-50, 0, 12.5)
+    , window
+        |> move3D (-50, -25, 25)
+    , window
+        |> move3D (-50, 25, 25)
+    ]
+door =
+  group3D
+    [ box 1.5 14 25
+        |> matte Color.darkBrown
+    , sphere 1
+        |> metallic (Color.rgb 255 220 0) 0.3
+        |> move3D (-0.75, -4, -1)
+    ]
+window =
+  group3D
+    [ box 1 15 15
+        |> plastic Color.darkBlue 0.25
+    , cylinder 0.75 (15 + 1.375)
+        |> matte Color.white
+        |> move3D (0, -7.5, 0)
+    , cylinder 0.75 (15 + 1.375)
+        |> matte Color.white
+        |> move3D (0, 7.5, 0)
+    , cylinder 0.75 (15 + 1.375)
+        |> matte Color.white
+        |> rotate3D 0 0 (degrees 90)
+        |> move3D (0, 0, 7.5)
+    , cylinder 0.75 (15 + 1.375)
+        |> matte Color.white
+        |> rotate3D 0 0 (degrees 90)
+        |> move3D (0, 0, -7.5)
+    ]
+
+medical model =
+  group3D
+    [ sphere 50
+        |> matte Color.blue
+     , polyCone [(-60, -60), (60, -60), (60, 60), (-60, 60), (-60, -60)] (0, 0, 40) model.meshStore
+        |> matte Color.white
+        |> move3D (0, 0, 47)
+     , rectangle3D 50 15
+        |> customMat Color.red 0.3 0
+        |> rotateY3D 100
+        |> move3D (-10,-10, 110)
+     , rectangle3D 50 15 
+        |> customMat Color.red 0.3 0
+        |> rotateZ3D 100
+        |> move3D (-10,-10, 110)
+    ]
+    
+
+
+    
+recreation model =
+  group3D
+    [ sphere 50
+        |> matte Color.lightYellow
+        , polyCone [(-20, -20), (20, -20), (20, 20), (-20, 20), (-20, -20)] (0, 0, 25) model.meshStore
+          |> matte Color.lightBlue
+          |> move3D (0, 0, 50)
+        , box 80 5 2
+          |> matte Color.lightRed
+          |> rotateY3D (degrees 15)
+          |> move3D (0, 0, 75)
+        , box 2 5 5
+          |> matte Color.lightBlue
+          |> move3D (-37,0,87)
+        , box 2 5 5
+          |> matte Color.lightBlue
+          |> move3D (38,0,67)
+        , sphere 3
+            |> customMat Color.red 0.3 0.3
+            |> move3D (0, 0, 100)
+         , box 2 2 45
+            |> customMat Color.green 0.3 0.3
+            |> move3D (0, 0, 75)
+         , rectangle3D 3 20
+            |> customMat Color.yellow 0.3 0.3
+            |> rotateX3D 10
+            |> move3D (0, 0, 100)
+         , rectangle3D 3 20
+            |> customMat Color.yellow 0.3 0.3
+            |> rotateX3D 20
+            |> move3D (0, 0, 100)
+         , rectangle3D 3 20
+            |> customMat Color.yellow 0.3 0.3
+            |> rotateX3D 30
+            |> move3D (0, 0, 100)
+         , rectangle3D 3 20
+            |> customMat Color.yellow 0.3 0.3
+            |> rotateX3D 40
+            |> move3D (0, 0, 100)
+         , rectangle3D 3 20
+            |> customMat Color.yellow 0.3 0.3
+            |> rotateX3D 50
+            |> move3D (0, 0, 100)
+         , rectangle3D 3 20
+            |> customMat Color.yellow 0.3 0.3
+            |> rotateX3D 60
+            |> move3D (0, 0, 100)
+    ]
+
+
+-- This is your city.
+-- For the Underwater Recursion lab, remember that it should be algorithmically generated.
+
+moduleNum = 20
+myCity model =
+  town model moduleNum
+  
+town model n =
+  let
+    actualN =
+      if n >= 3 then
+        n
+      else
+        3
+  in
+    connectTown model actualN [] actualN
+    
+connectTown model n present max = 
+    if n < 1 then
+      present
+    else
+      connectTown
+        model
+        (n - 1)
+        ( ( buildNode n (Point3d.meters (cordX n) (cordY n) 0) (new n)
+          , Set.fromList (connect n 1 max) 
+          ) :: present
+        )
+        max 
+
+
+connect n min max = 
+   if n == min then [n+1, n+2] 
+   else 
+     if n == max then 
+       if modBy 2 max == 0 then [n-1] 
+       else [n-1,n-2]
+     else 
+       if modBy 2 n == 0 then [n-1, n+1] 
+       else  
+           if n + 1 == max then [n-2,n-1,n+1] 
+           else [n-2, n-1, n+1 , n+2]
+           
+new n = 
+  if modBy 4 n == 1 then Housing 
+  else 
+    if modBy 4 n == 3 then Recreation 
+    else Medical 
+
+cordX n =
+  if modBy 2 n == 1 then toFloat (2*(n-1))
+  else toFloat (2*n - 2)
+  
+cordY n = 
+  if modBy 2 n == 1 then 0
+  else (sqrt 3) * (-2)
+
+-- Put your physics objects here!
+myPhysicsObjects model =
+    let
+        useTexture = getTexture model.textureLoader.textures
+    in
+        [ 
+        ] ++ buildCity (myCity model) model
+
+-- Put your update functions here! Try using "pushIf" or "updateIf"
+myPhysicsUpdates : Model -> List (Body PhysicsData -> Body PhysicsData)
+myPhysicsUpdates model =
+    [ 
+    ]
+
+{-| Define your submarine here. Note that animations will not work. -}
+submarineEntity : Model -> Object BodyCoordinates
+submarineEntity model =
+    group3D
+        [ ellipsoid 100 25 25 model.meshStore
+            |> metallic Color.lightGrey 0.3
+         , cone 10 30
+           |> metallic Color.lightBlue 0.3
+           |> rotateY3D(degrees 90)
+           |> move3D (80,0,0)
+         ,cylinder 10 30
+           |> metallic Color.lightBlue 0.3
+           |> move3D (10,0,28)
+         ,ellipsoid 10 30 5 model.meshStore
+           |> metallic Color.lightBlue 0.3
+           |> move3D (10,0,35)
+         ,ellipsoid 10 30 5 model.meshStore
+           |> metallic Color.lightBlue 0.3
+           |> move3D (-80,0,0)
+        ]
+subStartingPos : (Length, Length, Length)
+subStartingPos = (Length.meters 0, Length.meters 0, Length.meters 10)
+
+-- I don't recommend turning this on for these labs.
+useGravity = False
+
+-- Set this to true show position, velocity, and force visualizers for ALL bodies
+showPhysicsVisualizers = False
+
+-- Distance that the camera moves when you click the buttons in the top right corner
+cameraMoveDistance = Length.centimeters 25
+
+-- move / edit the light
+light =
+    pointLight
+        { position = Point3d.centimeters 0 0 100    -- position of the light
+        , chromaticity = Light.sunlight             -- the colour of the light (see https://package.elm-lang.org/packages/ianmackenzie/elm-3d-scene/latest/Scene3d-Light#Chromaticity)
+        , intensity = LuminousFlux.lumens 10000     -- how intense the light is
+        }
+showLight = True -- whether to show the light ball or not
+
+-- Use "loadTexture [name] [url]" to load in texture images from the Internet!
+-- Give each one a unique name.
+-- You can list many of them!
+myTextures = 
+    [ loadTexture "water" "https://sharyuwu.github.io/image/texture1.png"
+    ]
+
+-- Usage: `svgTexture "name" "name`, where shape is any 2D shape or group
+-- Give each one a unique name.
+-- You can list many of them!
+svgTextures =
+    [ svgTexture "squares" squares
+    ]
+
+-- SVG textures are 50 by 50
+squares =
+    group
+    [
+        square 25 |> filled purple |> move (12.5,12.5)
+    ,   square 25 |> filled orange |> move (-12.5,12.5)
+    ,   square 25 |> filled purple |> move (-12.5,-12.5)
+    ,   square 25 |> filled orange |> move (12.5,-12.5)
+    ]
+
+-- Put your 2D shapes here, and they will be overlayed on top of the screen!
+overlay : Model -> List (Shape Msg)
+overlay model =
+    [ submarineHUD model
+    ]
+
+-- This is the Heads-Up Display for the submarine.
+submarineHUD model =
+  let
+    -- Set up some useful variables and data
+    subMaybe = getBodyByName "submarine" model.world
+    colour = hsl (degrees 155) 1 0.2
+    colourHighlight = hsl (degrees 180) 1 0.3
+    subPos =
+      subMaybe
+        |> Maybe.map Body.frame
+        |> Maybe.withDefault Frame3d.atOrigin
+        |> Frame3d.originPoint
+    subVelocity =
+      subMaybe
+        |> Maybe.map Body.velocity
+        |> Maybe.withDefault (Vector3d.zero)
+    subX =
+      subMaybe
+        |> Maybe.map (Body.frame)
+        |> Maybe.withDefault Frame3d.atOrigin
+        |> Frame3d.xDirection
+    subY =
+      subMaybe
+        |> Maybe.map (Body.frame)
+        |> Maybe.withDefault Frame3d.atOrigin
+        |> Frame3d.yDirection
+    subZ =
+      subMaybe
+        |> Maybe.map (Body.frame)
+        |> Maybe.withDefault Frame3d.atOrigin
+        |> Frame3d.zDirection
+    screenWidth =
+      toFloat (unwrapQ model.width)
+    screenHeight =
+      toFloat (unwrapQ model.height)
+    -- Define HUD elements
+    collisionWarning = 
+     let
+      cityCenter n =
+        case modBy 2 n of
+         1 ->
+           let
+            number = toFloat (2*(n-1))
+           in
+            (number,0,0)
+         _ ->
+           let
+            number1 = toFloat (2*n - 2)
+            number2 = (sqrt 3) * (-2)
+           in
+            (number1,number2,0)
+      isCollided n =
+        let
+          (x,y,z) = cityCenter n
+        in
+          if n < 1 then
+            False
+          else 
+            if ((Length.inMeters (Point3d.xCoordinate subPos) - x)^2
+               +(Length.inMeters (Point3d.yCoordinate subPos) - y)^2
+               +(Length.inMeters (Point3d.zCoordinate subPos) - z)^2 < 25) then
+              True
+            else
+              isCollided(n-1)
+      positionStatus = isCollided (moduleNum-1)
+     in
+       if positionStatus then
+        text ("5M Warning!")
+         |> centered
+         |> size 20
+         |> filled red
+       else
+        text("No Warning")
+         |> centered
+         |> size 16
+         |> filled red
+    hudAltitude =
+      let
+        altitude =
+          subPos
+            |> Point3d.zCoordinate
+            -- The actual floor is 1 meter below the origin.
+            |> Quantity.plus (Length.meters 1)
+            |> Length.inMeters
+      in
+        text ("ALTITUDE: " ++ Round.round 2 altitude ++ "m")
+          |> customFont "Audiowide"
+          |> centered
+          |> size 16
+          |> filled colour
+    hudPitch =
+      let
+        sidePlane =
+          SketchPlane3d.unsafe
+            { originPoint = subPos
+            , xDirection =
+                subX
+                  |> Direction3d.projectOnto Plane3d.xy
+                  |> Maybe.withDefault subX
+            , yDirection = Direction3d.z
+            }
+        angle =
+          subX
+            |> Direction3d.azimuthIn sidePlane
+            |> Angle.inRadians
+        thickness = solid 2
+        radius = 75
+      in
+        group
+          [ circle radius
+              |> outlined thickness colour
+          , polygon [(0, 65), (-15, -30), (0, 0), (15, -30), (0, 65)]
+              |> filled colour
+              |> rotate (angle - (degrees 90))
+          , triangle 10
+              |> filled colour
+              |> rotate (degrees 180)
+              |> move (radius - 5, 0)
+          , triangle 10
+              |> filled colour
+              |> rotate (degrees -90)
+              |> move (0, radius - 5)
+          , triangle 10
+              |> filled colour
+              |> rotate (degrees 90)
+              |> move (0, -radius + 5)
+          , text "UP"
+              |> customFont "Audiowide"
+              |> centered
+              |> size 24
+              |> filled colourHighlight
+              |> move (0, radius + 10)
+          , text "PITCH"
+              |> customFont "Audiowide"
+              |> centered
+              |> size 16
+              |> filled colour
+              |> move (0, -radius - 20)
+          ]
+    -- Essentially a compass
+    hudYaw =
+      let
+        angle =
+          subX
+            |> Direction3d.azimuthIn SketchPlane3d.xy
+            |> Angle.inRadians
+        thickness = solid 2
+        radius = 75
+      in
+        group
+          [ circle radius
+              |> outlined thickness colour
+          , polygon [(0, 65), (-15, -30), (0, 0), (15, -30), (0, 65)]
+              |> filled colour
+              |> rotate angle
+          , triangle 10
+              |> filled colour
+              |> rotate (degrees -90)
+              |> move (0, radius - 5)
+          , text "N"
+              |> customFont "Audiowide"
+              |> centered
+              |> size 24
+              |> filled colourHighlight
+              |> move (0, radius + 10)
+          , text "YAW"
+              |> customFont "Audiowide"
+              |> centered
+              |> size 16
+              |> filled colour
+              |> move (0, -radius - 20)
+          ]
+    -- Reading the roll value is considerably more difficult than yaw.
+    -- Here, we are drawing a 2D plane facing forward, calculating the angle by
+    -- getting the azimuth of the submarine Y-direction's projection onto that plane
+    hudRoll =
+      let
+        -- A plane whose normal direction is the sub's forward direction
+        forwardPlane =
+          SketchPlane3d.unsafe
+            { originPoint =
+                subPos
+            , xDirection =
+                subX
+                  |> Direction3d.rotateAround Axis3d.z (Angle.degrees 90)
+            , yDirection =
+                Direction3d.z
+            }
+        -- The angle used for the roll meter is just the horizontal angle of the direction vector
+        -- on the forward-facing plane
+        angle =
+          subY
+            |> Direction3d.azimuthIn forwardPlane
+            |> Angle.inRadians
+            |> negate
+        thickness = solid 2
+        radius = 150
+      in
+        group
+          [ group -- The roll meter that rotates with the submarine.
+              [ circle radius
+                  |> outlined thickness colour
+                  |> clip (rectangle (radius * 3) (radius * 2) |> ghost |> move (0, radius))
+              , line (-radius - 25, 0) (-radius + 25, 0)
+                  |> outlined thickness colour
+              , line (-radius - 20, -10) (-radius + 20, -10)
+                  |> outlined thickness colour
+              , line (radius - 25, 0) (radius + 25, 0)
+                  |> outlined thickness colour
+              , line (radius - 20, -10) (radius + 20, -10)
+                  |> outlined thickness colour
+              , triangle 10
+                  |> filled colour
+                  |> rotate (degrees 90)
+                  |> move (0, radius + 5)
+              , triangle 10
+                  |> filled colour
+                  |> rotate (degrees -90)
+                  |> move (0, -radius - 5)
+              , line (-25, -radius) (25, -radius)
+                  |> outlined thickness colour
+              , line (-20, -radius + 10) (20, -radius + 10)
+                  |> outlined thickness colour
+              ]
+              |> rotate angle
+          -- A static indicator so you know where the neutral state is.
+          , group 
+              [ triangle 10
+                  |> filled colour
+                  |> rotate (degrees -90)
+              , line (-25, 0) (25, 0)
+                  |> outlined thickness colour
+                  |> move (0, 5)
+              ]
+              |> move (0, radius + 25)
+          , text "ROLL"
+              |> customFont "Audiowide"
+              |> centered
+              |> size 16
+              |> filled colour
+              |> move (0, radius + 40)
+          ]
+  in
+    group
+      [ hudAltitude
+          |> move (0, screenHeight / 2 - 50)
+      , hudPitch
+          |> move (-screenWidth / 2 + 150, -screenHeight / 2 + 150)
+      , hudYaw
+          |> move (screenWidth / 2 - 150, -screenHeight / 2 + 150)
+      , hudRoll
+      , collisionWarning
+      ]
+
+skyboxType =
+    Skybox.URLSkybox textureBottom textureTop textureSide1 textureSide2 textureSide3 textureSide4
+
+textureBottom : String
+textureBottom =
+    "Put an image URL here!"
+
+textureTop : String
+textureTop =
+    "Put an image URL here!"
+
+textureSide1 : String
+textureSide1 =
+    "Put an image URL here!"
+
+textureSide2 : String
+textureSide2 =
+    "Put an image URL here!"
+
+textureSide3 : String
+textureSide3 =
+    "Put an image URL here!"
+
+textureSide4 : String
+textureSide4 =
+    "Put an image URL here!"
